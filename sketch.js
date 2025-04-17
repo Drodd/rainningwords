@@ -26,12 +26,33 @@ const MAX_BG_LETTERS = 200;
 const MIN_BG_LETTERS = 50;
 
 // 暴雨事件控制
-let isRedStorm = false; // 是否处于暴雨状态
-let redStormStartTime = 0; // 暴雨开始时间
-const RED_STORM_DURATION = 2000; // 暴雨持续2秒
-let nextRedStormTime = 0; // 下一次暴雨时间
-const RED_STORM_MIN_INTERVAL = 15000; // 最短暴雨间隔15秒
-const RED_STORM_MAX_INTERVAL = 20000; // 最长暴雨间隔20秒
+let isWhiteStorm = false; // 是否处于暴雨状态
+let whiteStormStartTime = 0; // 暴雨开始时间
+const WHITE_STORM_DURATION = 2000; // 暴雨持续2秒
+let nextWhiteStormTime = 0; // 下一次暴雨时间
+const WHITE_STORM_MIN_INTERVAL = 15000; // 最短暴雨间隔15秒
+const WHITE_STORM_MAX_INTERVAL = 20000; // 最长暴雨间隔20秒
+
+// 闪电效果控制
+let lightningFlashes = []; // 存储闪电效果时间
+let isLightningWarning = false; // 是否处于闪电预警阶段
+let lightningWarningStartTime = 0; // 闪电预警开始时间
+const LIGHTNING_WARNING_DURATION = 3000; // 闪电预警持续3秒
+
+// 背景和雨伞颜色控制
+let bgColorStart = [153, 179, 204]; // 初始背景色
+let bgColorTarget = [0, 0, 0]; // 暴雨时背景色（黑色）
+let bgColorCurrent = [...bgColorStart]; // 当前背景色
+let umbrellaColor = [0, 0, 0]; // 雨伞颜色
+let colorTransitionProgress = 0; // 颜色过渡进度
+const COLOR_TRANSITION_DURATION = 1000; // 颜色过渡持续时间（毫秒）
+let isTransitioningIn = false; // 是否正在过渡进入暴雨
+let isTransitioningOut = false; // 是否正在过渡退出暴雨
+let transitionStartTime = 0; // 过渡开始时间
+
+// 新增暴雨阶段控制
+let stormPhase = 0; // 0=无暴雨, 1=预警等待空闲, 2=已刷出白色短句等待空闲, 3=恢复正常
+let isStormPaused = false; // 是否暂停正常短句刷新
 
 // 富有诗意的短句库
 const sentences = [
@@ -87,7 +108,7 @@ const sentences = [
   "你对未来规划不够清晰"
 ];
 
-// 偏见短句库（红色，伤害玩家）
+// 偏见短句库（白色，伤害玩家）
 const prejudiceSentences = [
   "你太敏感了，一点小事就受不了",
   "就你这水平还想得到认可？",
@@ -152,11 +173,6 @@ const BG_BATCH_SIZE = 50;
 let occupiedColumns = [];
 const COLUMN_WIDTH = 50; // 每列的宽度
 
-// 添加暴雨闪烁效果控制变量
-let redFlashEffect = false;
-let redFlashStartTime = 0;
-const RED_FLASH_DURATION = 500; // 闪烁效果持续500毫秒
-
 function preload() {
   // 创建伞的图形
   createUmbrellaGraphics();
@@ -165,7 +181,13 @@ function preload() {
 // 创建伞的图形
 function createUmbrellaGraphics() {
   umbrellaImg = createGraphics(300, 200);
-  umbrellaImg.fill(0);
+  updateUmbrellaGraphics();
+}
+
+// 更新雨伞颜色并重绘
+function updateUmbrellaGraphics() {
+  umbrellaImg.clear(); // 清除之前的内容
+  umbrellaImg.fill(umbrellaColor[0], umbrellaColor[1], umbrellaColor[2]);
   umbrellaImg.noStroke();
   // 绘制伞的半圆形顶部
   umbrellaImg.arc(150, 120, 280, 160, PI, 0, CHORD);
@@ -198,7 +220,7 @@ function setup() {
   textSize(16);
   
   // 初始化第一次暴雨时间
-  scheduleNextRedStorm();
+  scheduleNextWhiteStorm();
   
   // 初始化玩家大小
   player.updateSize();
@@ -260,6 +282,11 @@ function optimizePerformance() {
 
 // 添加新雨滴，确保不与现有雨滴重叠
 function addNewRaindrop() {
+  // 如果正处于暴雨暂停状态，不添加新雨滴
+  if (isStormPaused) {
+    return;
+  }
+  
   let columnIndex;
   let attempts = 0;
   const maxAttempts = 50; // 防止无限循环
@@ -271,20 +298,15 @@ function addNewRaindrop() {
   } while (occupiedColumns[columnIndex]);
   
   if (attempts <= maxAttempts) {
-    // 严格标记列为已占用（非暴雨状态下严格执行一列一个短句的规则）
     occupiedColumns[columnIndex] = true;
     
     // 检查是否需要确保垂直间距
     let verticalSpacing = checkColumnVerticalSpace(columnIndex);
     
-    // 根据是否处于暴雨状态决定是否强制生成红色短句
-    let newRaindrop = new Raindrop(columnIndex * COLUMN_WIDTH + COLUMN_WIDTH / 2, isRedStorm, verticalSpacing);
+    // 根据是否处于暴雨状态决定是否强制生成白色短句
+    let newRaindrop = new Raindrop(columnIndex * COLUMN_WIDTH + COLUMN_WIDTH / 2, isWhiteStorm, verticalSpacing);
     raindrops.push(newRaindrop);
-    
-    return true; // 返回成功添加的标志
   }
-  
-  return false; // 返回添加失败的标志
 }
 
 // 检查指定列的垂直空间，并返回合适的起始Y位置
@@ -306,87 +328,62 @@ function checkColumnVerticalSpace(columnIndex) {
 }
 
 // 调度下一次暴雨事件
-function scheduleNextRedStorm() {
+function scheduleNextWhiteStorm() {
   // 随机设置下一次暴雨时间
-  let interval = random(RED_STORM_MIN_INTERVAL, RED_STORM_MAX_INTERVAL);
-  nextRedStormTime = millis() + interval;
+  nextWhiteStormTime = millis() + random(WHITE_STORM_MIN_INTERVAL, WHITE_STORM_MAX_INTERVAL);
+  console.log("下一次暴雨预计在 " + ((nextWhiteStormTime - millis()) / 1000).toFixed(1) + " 秒后");
 }
 
 // 开始暴雨事件
-function startRedStorm() {
-  isRedStorm = true;
-  redStormStartTime = millis();
+function startWhiteStorm() {
+  // 先启动闪电预警
+  isLightningWarning = true;
+  lightningWarningStartTime = millis();
   
-  // 触发红色闪烁效果
-  redFlashEffect = true;
-  redFlashStartTime = millis();
-  
-  // 在所有空闲列刷出红色短句
-  fillAllColumnsWithRed();
-  
-  // 立即结束暴雨状态
-  isRedStorm = false;
-  scheduleNextRedStorm(); // 安排下一次暴雨
-  
-  // 重置列占用状态
-  cleanupAfterRedStorm();
-}
-
-// 在所有空闲列添加红色短句
-function fillAllColumnsWithRed() {
-  // 计算空闲的列
-  let freeColumns = [];
-  for (let i = 0; i < occupiedColumns.length; i++) {
-    if (!occupiedColumns[i]) {
-      freeColumns.push(i);
-    }
+  // 生成随机的闪电时间
+  lightningFlashes = [];
+  const numFlashes = random(5, 10); // 5-10次闪电
+  for (let i = 0; i < numFlashes; i++) {
+    // 随机时间，但保证分布在整个闪电预警持续时间内
+    lightningFlashes.push({
+      time: random(LIGHTNING_WARNING_DURATION * 0.1, LIGHTNING_WARNING_DURATION * 0.9),
+      duration: random(50, 200) // 闪电持续50-200毫秒
+    });
   }
   
-  // 简化函数，在所有空闲列添加红色短句
-  for (let colIndex of freeColumns) {
-    occupiedColumns[colIndex] = true;
+  // 暂停正常短句刷新
+  isStormPaused = true;
+  
+  console.log("闪电预警开始，即将进入暴雨状态");
+}
+
+// 检查所有列是否空闲
+function areAllColumnsEmpty() {
+  return !occupiedColumns.some(col => col === true);
+}
+
+// 在所有空闲列添加白色短句
+function fillAllColumnsWithWhite() {
+  // 确保所有列都是空闲的
+  if (!areAllColumnsEmpty()) {
+    console.log("等待所有列空闲");
+    return false; // 未完成填充
+  }
+  
+  // 遍历所有列，每列都添加一个白色短句
+  for (let i = 0; i < occupiedColumns.length; i++) {
+    occupiedColumns[i] = true;
     
     // 检查列的垂直空间
-    let verticalSpacing = checkColumnVerticalSpace(colIndex);
+    let verticalSpacing = checkColumnVerticalSpace(i);
     
-    // 添加新的红色短句
-    let newRaindrop = new Raindrop(colIndex * COLUMN_WIDTH + COLUMN_WIDTH / 2, true, verticalSpacing);
+    // 添加新的白色短句
+    let newRaindrop = new Raindrop(i * COLUMN_WIDTH + COLUMN_WIDTH / 2, true, verticalSpacing);
     raindrops.push(newRaindrop);
   }
   
-  // 尝试给一些已经有雨滴但雨滴已经下落较远的列添加新的红色短句
-  // 这会使暴雨效果更明显
-  let columnStatus = [];
-  for (let i = 0; i < occupiedColumns.length; i++) {
-    columnStatus[i] = {
-      lowestY: -1000, // 默认位置很高
-      hasRaindrop: false
-    };
-  }
-  
-  // 检查每个雨滴位置
-  for (let raindrop of raindrops) {
-    let colIdx = raindrop.columnIndex;
-    columnStatus[colIdx].hasRaindrop = true;
-    
-    // 更新该列中最低雨滴的位置
-    if (raindrop.y > columnStatus[colIdx].lowestY) {
-      columnStatus[colIdx].lowestY = raindrop.y;
-    }
-  }
-  
-  // 找出那些雨滴已经下落较远的列
-  for (let i = 0; i < columnStatus.length; i++) {
-    let status = columnStatus[i];
-    // 只考虑已有雨滴、且最低雨滴已经下落到足够远的列
-    if (status.hasRaindrop && status.lowestY > 200) {
-      // 创建一个新的红色短句，竖直位置设置得较高以避免与现有雨滴重叠
-      let verticalSpacing = random(-500, -300);
-      let newRaindrop = new Raindrop(i * COLUMN_WIDTH + COLUMN_WIDTH / 2, true, verticalSpacing);
-      raindrops.push(newRaindrop);
-      // 注意：这里不需要改变occupiedColumns的状态，因为该列已经被标记为占用
-    }
-  }
+  console.log("已在所有列填充白色短句");
+  return true; // 完成填充
 }
 
 function draw() {
@@ -397,17 +394,12 @@ function draw() {
   optimizePerformance();
   
   // 更新暴雨状态
-  updateRedStormStatus();
-  
-  // 检查是否需要结束红色闪烁效果
-  if (redFlashEffect && millis() - redFlashStartTime > RED_FLASH_DURATION) {
-    redFlashEffect = false;
-  }
+  updateWhiteStormStatus();
   
   // 绘制背景
-  if (redFlashEffect) {
-    // 暴雨状态下背景略微偏红
-    background(160, 165, 190); // 带一点红色调的背景
+  if (isWhiteStorm || isTransitioningIn || isTransitioningOut) {
+    // 使用当前过渡颜色
+    background(bgColorCurrent[0], bgColorCurrent[1], bgColorCurrent[2]);
   } else {
     // 正常背景
     background(153, 179, 204); // 与图片中的浅蓝色背景匹配
@@ -418,12 +410,15 @@ function draw() {
     drawBackgroundLetters();
   }
   
+  // 显示得分 - 在背景层之后，雨滴之前
+  displayScore();
+  
   // 检查游戏是否结束（HP为0）
   if (player.hp <= 0) {
     // 显示游戏结束信息
     textAlign(CENTER, CENTER);
     textSize(42);
-    fill(255, 0, 0);
+    fill(255, 255, 255);
     text("游戏结束", width/2, height/2 - 30);
     textSize(24);
     text("得分: " + score, width/2, height/2 + 30);
@@ -433,23 +428,41 @@ function draw() {
     return;
   }
   
-  // 如果在闪烁效果期间，绘制屏幕闪烁效果
-  if (redFlashEffect) {
-    // 计算闪烁强度（基于时间）
-    let progress = (millis() - redFlashStartTime) / RED_FLASH_DURATION;
-    let flashIntensity = (1 - progress) * 0.8; // 从0.8降到0
+  // 处理闪电预警效果
+  if (isLightningWarning) {
+    let currentLightningTime = millis() - lightningWarningStartTime;
     
-    // 绘制红色覆盖
-    fill(255, 0, 0, flashIntensity * 40); // 半透明红色覆盖
+    // 检查是否应该显示闪电
+    let isFlashing = false;
+    for (let flash of lightningFlashes) {
+      if (currentLightningTime >= flash.time && 
+          currentLightningTime <= flash.time + flash.duration) {
+        isFlashing = true;
+        break;
+      }
+    }
+    
+    if (isFlashing) {
+      // 闪电效果 - 全屏白色
+      fill(255, 255, 255, 200);
+      noStroke();
+      rect(0, 0, width, height);
+    }
+  }
+  // 如果在暴雨状态下，绘制暴雨效果
+  else if (isWhiteStorm && !isTransitioningIn && !isTransitioningOut) {
+    // 绘制轻微的持续闪烁效果
+    let flashIntensity = sin(frameCount * 0.5) * 0.5 + 0.5; // 0-1的闪烁强度
+    fill(255, 255, 255, flashIntensity * 20); // 半透明白色覆盖
     noStroke();
     rect(0, 0, width, height);
   }
   
   // 更新和显示雨滴
   for (let i = raindrops.length - 1; i >= 0; i--) {
-    // 如果是红色短句且在闪烁效果期间，速度更快
-    if (redFlashEffect && raindrops[i].isPrejudice) {
-      raindrops[i].speed *= 1.01; // 略微增加速度，产生加速效果
+    // 在暴雨状态下，白色短句下落速度更快
+    if (isWhiteStorm && raindrops[i].isPrejudice) {
+      raindrops[i].speed *= 1.005; // 略微增加速度，产生加速效果
     }
     
     raindrops[i].update();
@@ -459,29 +472,9 @@ function draw() {
     if (raindrops[i].checkSplashChars()) {
       // 如果所有字符都已经飞溅或被吸收，则释放该列并创建新雨滴
       if (raindrops[i].allCharsSplashed()) {
-        let columnToFree = raindrops[i].columnIndex;
-        
-        // 从数组中移除这个雨滴
+        occupiedColumns[raindrops[i].columnIndex] = false;
         raindrops.splice(i, 1);
-        
-        // 只有在非暴雨状态下才严格遵循一列一个短句的原则
-        if (!isRedStorm) {
-          // 标记列为空闲
-          occupiedColumns[columnToFree] = false;
-          
-          // 随机决定是否立即在这一列创建新短句
-          if (random() < 0.7) { // 70%的概率立即创建新短句
-            // 手动指定在这一列创建新短句
-            let verticalSpacing = random(-300, -100);
-            let newRaindrop = new Raindrop(columnToFree * COLUMN_WIDTH + COLUMN_WIDTH / 2, false, verticalSpacing);
-            raindrops.push(newRaindrop);
-            occupiedColumns[columnToFree] = true;
-          } else {
-            // 尝试在随机列创建新短句
-            addNewRaindrop();
-          }
-        }
-        
+        addNewRaindrop();
         continue; // 跳过后面的代码，避免对已删除的雨滴进行操作
       }
     }
@@ -491,29 +484,9 @@ function draw() {
       if (player.checkAbsorption(raindrops[i])) {
         // 如果全部字符被吸收，检查是否需要释放该列
         if (raindrops[i].allCharsSplashed()) {
-          let columnToFree = raindrops[i].columnIndex;
-          
-          // 从数组中移除这个雨滴
+          occupiedColumns[raindrops[i].columnIndex] = false;
           raindrops.splice(i, 1);
-          
-          // 只有在非暴雨状态下才严格遵循一列一个短句的原则
-          if (!isRedStorm) {
-            // 标记列为空闲
-            occupiedColumns[columnToFree] = false;
-            
-            // 随机决定是否立即在这一列创建新短句
-            if (random() < 0.7) { // 70%的概率立即创建新短句
-              // 手动指定在这一列创建新短句
-              let verticalSpacing = random(-300, -100);
-              let newRaindrop = new Raindrop(columnToFree * COLUMN_WIDTH + COLUMN_WIDTH / 2, false, verticalSpacing);
-              raindrops.push(newRaindrop);
-              occupiedColumns[columnToFree] = true;
-            } else {
-              // 尝试在随机列创建新短句
-              addNewRaindrop();
-            }
-          }
-          
+          addNewRaindrop();
           continue; // 跳过后面的代码，避免对已删除的雨滴进行操作
         }
       }
@@ -539,15 +512,14 @@ function draw() {
   push();
   translate(umbrellaX, umbrellaY);
   scale(umbrellaScale);
+  // 使用当前雨伞颜色
+  updateUmbrellaGraphics(); // 更新雨伞颜色
   image(umbrellaImg, 0, 0);
   pop();
   
   // 更新和显示玩家
   player.update();
   player.display();
-  
-  // 显示得分
-  displayScore();
   
   // 如果在调试模式下，显示更多信息
   if (debugMode) {
@@ -560,12 +532,12 @@ function draw() {
     text("氛围字符: " + bgLetters.length, 20, 110);
     text("帧率: " + floor(frameRate()), 20, 130);
     
-    // 计算红色短句数量
-    let redCount = 0;
+    // 计算白色短句数量
+    let whiteCount = 0;
     for (let drop of raindrops) {
-      if (drop.isPrejudice) redCount++;
+      if (drop.isPrejudice) whiteCount++;
     }
-    text("红色短句数: " + redCount, 20, 150);
+    text("白色短句数: " + whiteCount, 20, 150);
     text("血量: " + player.hp.toFixed(1) + "/" + player.maxHp, 20, 170);
     
     // 显示玩家大小增长信息
@@ -579,13 +551,20 @@ function draw() {
     text("回血状态: " + healingStatus + (healingStatus === "冷却中" ? " (" + remainingTime.toFixed(1) + "秒)" : ""), 20, 210);
     
     // 显示暴雨事件信息
-    if (redFlashEffect) {
-      let flashTimeLeft = (RED_FLASH_DURATION - (millis() - redFlashStartTime)) / 1000;
+    if (isWhiteStorm) {
+      let stormPhaseText = "";
+      switch(stormPhase) {
+        case 1: stormPhaseText = "预警等待空闲"; break;
+        case 2: stormPhaseText = "等待白色短句结束"; break;
+        default: stormPhaseText = "未知阶段";
+      }
+      
       fill(255, 0, 0);
-      text("暴雨效果: 进行中 (" + flashTimeLeft.toFixed(1) + "秒)", 20, 230);
+      text("暴雨事件: 进行中 (" + stormPhaseText + ")", 20, 230);
       fill(0);
     } else {
-      let timeToNextStorm = (nextRedStormTime - millis()) / 1000;
+      let timeToNextStorm = (nextWhiteStormTime - millis()) / 1000;
+      timeToNextStorm = max(0, timeToNextStorm); // 确保不显示负数
       text("暴雨事件: 冷却中 (" + timeToNextStorm.toFixed(1) + "秒)", 20, 230);
     }
     
@@ -608,22 +587,34 @@ function draw() {
     text("自动优化: " + (autoOptimize ? "开启" : "关闭"), 20, 270);
     
     // 显示伤害机制说明
-    fill(255, 0, 0);
-    text("红色短句：每字 -10 HP", 20, 290);
+    fill(255, 255, 255);
+    text("白色短句：每字 -10 HP", 20, 290);
     fill(0);
     
     // 显示颜色一致性信息
-    text("颜色方案: 黑色(普通)，红色(偏见短句)", 20, 310);
+    text("颜色方案: 黑色(普通)，白色(偏见短句)", 20, 310);
+    
+    // 显示当前暴雨特效状态
+    let stateText = "正常";
+    if (isLightningWarning) stateText = "闪电预警";
+    else if (isTransitioningIn) stateText = "进入暴雨过渡";
+    else if (isWhiteStorm) stateText = "暴雨中";
+    else if (isTransitioningOut) stateText = "退出暴雨过渡";
+    text("特效状态: " + stateText + " (" + colorTransitionProgress.toFixed(2) + ")", 20, 330);
+    
+    // 显示当前背景和雨伞颜色
+    text("背景RGB: " + bgColorCurrent.map(v => Math.round(v)).join(", "), 20, 350);
+    text("雨伞RGB: " + umbrellaColor.map(v => Math.round(v)).join(", "), 20, 370);
     
     // 绘制颜色样本
-    let sampleY = 330;
+    let sampleY = 390;
     // 普通短句样本
     fill(0, 0, 0, 255);
     rect(20, sampleY, 25, 25);
     text("普通", 60, sampleY + 12);
     
-    // 红色短句样本
-    fill(255, 0, 0, 255);
+    // 白色短句样本
+    fill(255, 255, 255, 255);
     rect(120, sampleY, 25, 25);
     text("偏见", 160, sampleY + 12);
     
@@ -661,8 +652,15 @@ function drawBackgroundLetters() {
         }
       }
       
-      // 绘制字母
-      fill(0, 0, 0, letter.alpha);
+      // 根据暴雨状态决定背景字母颜色
+      if (isWhiteStorm && colorTransitionProgress > 0.5) {
+        // 暴雨状态(黑色背景)下使用白色字母
+        fill(255, 255, 255, letter.alpha);
+      } else {
+        // 正常状态下使用黑色字母
+        fill(0, 0, 0, letter.alpha);
+      }
+      
       textSize(letter.size);
       text(letter.char, letter.x, letter.y);
     }
@@ -671,19 +669,29 @@ function drawBackgroundLetters() {
 
 // 显示得分
 function displayScore() {
-  fill(0);
-  textSize(24);
-  textAlign(LEFT, TOP);
-  text("成绩: " + score, 20, 20);
+  // 将分数显示在屏幕中央，放在背景层
+  push();
+  textAlign(CENTER, CENTER);
   
-  // 显示血量
-  text("生命: " + player.hp.toFixed(0) + "/" + player.maxHp, 200, 20);
+  // 缩小字体大小到原来的50%
+  let fontSize = 100; // 原来200的50%
+  textSize(fontSize);
   
-  // 显示当前大小增长
-  let growthPercent = (score * 0.01 * 100).toFixed(0);
-  text("大小: +" + growthPercent + "%", 400, 20);
+  // 计算垂直位置 - 移到画面高度的15%处
+  let scoreY = height * 0.15; 
   
-  textAlign(CENTER, CENTER); // 恢复默认对齐
+  // 分数使用半透明白色显示，透明度增加50%
+  if (isWhiteStorm && colorTransitionProgress > 0.5) {
+    // 在暴雨黑色背景下使用白色显示
+    fill(255, 255, 255, 0); // 原来是180，增加50%透明度，即减少alpha值
+  } else {
+    // 在正常背景下使用白色显示，但更不透明
+    fill(255, 255, 255, 50); // 原来是220，增加50%透明度，即减少alpha值
+  }
+  
+  // 只显示纯数字分数，在新位置
+  text(score, width / 2, scoreY);
+  pop();
 }
 
 // 按键事件，用于切换调试模式和自动优化
@@ -719,10 +727,20 @@ function resetGame() {
   // 重置玩家大小
   player.updateSize();
   
-  // 重置暴雨事件
-  isRedStorm = false;
-  redFlashEffect = false; // 重置闪烁效果
-  scheduleNextRedStorm();
+  // 重置暴雨事件和相关效果
+  isWhiteStorm = false;
+  isLightningWarning = false;
+  stormPhase = 0;
+  isStormPaused = false;
+  isTransitioningIn = false;
+  isTransitioningOut = false;
+  colorTransitionProgress = 0;
+  bgColorCurrent = [...bgColorStart];
+  umbrellaColor = [0, 0, 0]; // 黑色雨伞
+  updateUmbrellaGraphics(); // 更新雨伞颜色
+  
+  // 安排下一次暴雨
+  scheduleNextWhiteStorm();
   
   // 重置占用列
   for (let i = 0; i < occupiedColumns.length; i++) {
@@ -875,7 +893,7 @@ class Player {
           
           // 根据是否为偏见短句决定加分或扣血
           if (raindrop.isPrejudice) {
-            // 红色偏见短句会造成伤害
+            // 白色偏见短句会造成伤害
             this.hp -= 10; // 每个字减少10点血量
             if (this.hp < 0) this.hp = 0; // 确保血量不为负
             
@@ -967,7 +985,16 @@ class Player {
     
     // 绘制"我"字
     textSize(this.size);
-    fill(0);
+    
+    // 判断是否在暴雨状态(背景为黑色)
+    if (isWhiteStorm && colorTransitionProgress > 0.5) {
+      // 背景变黑后，使用白色显示"我"字
+      fill(255);
+    } else {
+      // 正常状态下使用黑色
+      fill(0);
+    }
+    
     text("我", this.x, this.y);
     
     // 绘制吸收动画效果
@@ -1005,12 +1032,12 @@ class Raindrop {
     this.speed = random(2, 5);
     
     // 根据参数或暴雨状态决定句子类型
-    if (forcePrejudice || isRedStorm) {
-      // 强制生成红色偏见短句
+    if (forcePrejudice || isWhiteStorm) {
+      // 强制生成白色偏见短句
       this.isPrejudice = true;
     } else {
-      // 正常情况随机决定是创建普通短句还是红色偏见短句
-      this.isPrejudice = random() < 0.3; // 30%概率出现红色短句
+      // 正常情况随机决定是创建普通短句还是白色偏见短句
+      this.isPrejudice = random() < 0.3; // 30%概率出现白色短句
     }
     
     if (this.isPrejudice) {
@@ -1039,9 +1066,9 @@ class Raindrop {
     
     // 基于是否为偏见短句决定大小和颜色
     if (this.isPrejudice) {
-      // 红色偏见短句始终使用36号字体和255透明度
+      // 偏见短句使用36号字体和255透明度
       this.size = 36;
-      this.color = color(255, 0, 0, 255); // 纯红色，不透明
+      this.color = color(255, 255, 255, 255); // 纯白色，不透明
     } else {
       // 普通短句
       // 基于深度值确定字体大小和颜色深浅
@@ -1165,7 +1192,12 @@ class SplashParticle {
     let originalAlpha = alpha(this.originalColor);
     let newAlpha = map(this.age, 0, this.lifetime, originalAlpha, 0);
     
-    this.color = color(0, 0, 0, newAlpha); // 保持纯黑色，只改变透明度
+    // 判断背景颜色，在暴雨状态(黑色背景)下用白色，否则用黑色
+    if (isWhiteStorm && colorTransitionProgress > 0.5) {
+      this.color = color(255, 255, 255, newAlpha); // 使用白色，调整透明度
+    } else {
+      this.color = color(0, 0, 0, newAlpha); // 使用黑色，调整透明度
+    }
   }
   
   display() {
@@ -1184,44 +1216,120 @@ class SplashParticle {
 }
 
 // 更新暴雨状态
-function updateRedStormStatus() {
+function updateWhiteStormStatus() {
   let currentTime = millis();
   
-  // 如果不在暴雨状态，检查是否应该开始暴雨
-  if (!isRedStorm && currentTime >= nextRedStormTime) {
-    startRedStorm();
-  }
-}
-
-// 暴雨结束后的清理工作，确保列占用状态正确恢复
-function cleanupAfterRedStorm() {
-  // 重新检查每一列是否有雨滴
-  let columnsWithRaindrops = Array(occupiedColumns.length).fill(false);
-  
-  // 遍历所有雨滴，记录它们所在的列
-  for (let raindrop of raindrops) {
-    columnsWithRaindrops[raindrop.columnIndex] = true;
+  // 如果不在暴雨状态但该开始暴雨了
+  if (stormPhase === 0 && currentTime >= nextWhiteStormTime && !isLightningWarning && !isWhiteStorm) {
+    startWhiteStorm();
+    return;
   }
   
-  // 更新占用列数组，确保与实际雨滴分布一致
-  for (let i = 0; i < occupiedColumns.length; i++) {
-    occupiedColumns[i] = columnsWithRaindrops[i];
+  // 处理闪电预警阶段
+  if (isLightningWarning) {
+    // 闪电预警结束后，开始正式暴雨
+    if (currentTime - lightningWarningStartTime >= LIGHTNING_WARNING_DURATION) {
+      isLightningWarning = false;
+      isWhiteStorm = true;
+      whiteStormStartTime = currentTime;
+      stormPhase = 1; // 进入预警等待空闲阶段
+      
+      // 启动颜色过渡
+      isTransitioningIn = true;
+      transitionStartTime = currentTime;
+      
+      console.log("闪电预警结束，开始暴雨，等待所有列空闲");
+    }
+    return;
   }
   
-  // 在没有雨滴的列中添加一些新的普通短句，保证基本的游戏流畅性
-  let emptyColumns = 0;
-  for (let i = 0; i < occupiedColumns.length; i++) {
-    if (!occupiedColumns[i]) {
-      emptyColumns++;
+  // 处理颜色过渡
+  if (isTransitioningIn) {
+    colorTransitionProgress = (currentTime - transitionStartTime) / COLOR_TRANSITION_DURATION;
+    if (colorTransitionProgress >= 1) {
+      colorTransitionProgress = 1;
+      isTransitioningIn = false;
+      
+      // 背景完全变黑后，移除所有黑色短句
+      removeAllNormalRaindrops();
+      console.log("背景变黑，移除所有黑色短句");
+    }
+    // 更新背景颜色和雨伞颜色
+    updateColors();
+  }
+  
+  if (isTransitioningOut) {
+    colorTransitionProgress = 1 - (currentTime - transitionStartTime) / COLOR_TRANSITION_DURATION;
+    if (colorTransitionProgress <= 0) {
+      colorTransitionProgress = 0;
+      isTransitioningOut = false;
+    }
+    // 更新背景颜色和雨伞颜色
+    updateColors();
+  }
+  
+  // 暴雨预警阶段 - 等待所有列空闲
+  if (stormPhase === 1) {
+    if (areAllColumnsEmpty()) {
+      // 所有列都空闲，刷出白色短句
+      fillAllColumnsWithWhite();
+      stormPhase = 2; // 进入等待白色短句结束阶段
+      console.log("填充白色短句完成，进入等待阶段");
     }
   }
   
-  // 确保至少有一定数量的短句在屏幕上
-  let minRaindrops = min(occupiedColumns.length / 3, 10); // 至少有1/3的列或10个雨滴
-  let additionalDropsNeeded = max(0, minRaindrops - raindrops.length);
+  // 等待白色短句结束阶段
+  else if (stormPhase === 2) {
+    if (areAllColumnsEmpty()) {
+      // 所有白色短句结束，开始过渡退出暴雨
+      stormPhase = 3; // 进入颜色恢复阶段
+      isTransitioningOut = true;
+      transitionStartTime = currentTime;
+      console.log("白色短句结束，开始恢复正常环境");
+    }
+  }
   
-  // 添加一些新的普通短句
-  for (let i = 0; i < min(additionalDropsNeeded, emptyColumns); i++) {
-    addNewRaindrop();
+  // 颜色恢复阶段
+  else if (stormPhase === 3 && !isTransitioningOut) {
+    // 颜色过渡完成，完全恢复正常
+    stormPhase = 0;
+    isStormPaused = false;
+    isWhiteStorm = false;
+    
+    // 安排下一次暴雨
+    scheduleNextWhiteStorm();
+    console.log("暴雨事件完全结束，恢复正常");
+    
+    // 重新添加初始短句，确保不在同一列
+    for (let i = 0; i < 30; i++) {
+      addNewRaindrop();
+    }
+  }
+}
+
+// 更新背景和雨伞颜色
+function updateColors() {
+  // 计算插值颜色
+  for (let i = 0; i < 3; i++) {
+    bgColorCurrent[i] = lerp(bgColorStart[i], bgColorTarget[i], colorTransitionProgress);
+  }
+  
+  // 雨伞颜色 - 从黑色到白色
+  if (isWhiteStorm) {
+    umbrellaColor[0] = umbrellaColor[1] = umbrellaColor[2] = lerp(0, 255, colorTransitionProgress);
+  } else {
+    umbrellaColor[0] = umbrellaColor[1] = umbrellaColor[2] = lerp(255, 0, 1 - colorTransitionProgress);
+  }
+}
+
+// 移除所有正在下落的黑色短句
+function removeAllNormalRaindrops() {
+  for (let i = raindrops.length - 1; i >= 0; i--) {
+    if (!raindrops[i].isPrejudice) {
+      // 释放该列
+      occupiedColumns[raindrops[i].columnIndex] = false;
+      // 移除黑色短句
+      raindrops.splice(i, 1);
+    }
   }
 } 
