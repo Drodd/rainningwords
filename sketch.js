@@ -25,6 +25,9 @@ const MAX_BG_LETTERS = 200;
 // 最小背景字符数
 const MIN_BG_LETTERS = 50;
 
+// 游戏状态控制
+let gameState = "start"; // 可能的状态: "start", "playing", "end"
+
 // 暴雨事件控制
 let isWhiteStorm = false; // 是否处于暴雨状态
 let whiteStormStartTime = 0; // 暴雨开始时间
@@ -110,20 +113,20 @@ const sentences = [
 
 // 偏见短句库（白色，伤害玩家）
 const prejudiceSentences = [
-  "你太敏感了，一点小事就受不了",
-  "就你这水平还想得到认可？",
+  "一点小事就受不了",
+  "就你这水平还想得到认可",
   "你怎么连这么简单的事都做不好",
-  "别人早就完成了，就你磨蹭",
+  "别人早就完成了",
   "你是不是有点智商问题",
   "这么多年了还是老样子",
-  "就你这样还想得到赞赏？",
+  "就你这样还想得到赞赏",
   "你做的这些简直是浪费时间",
   "谁让你自作主张的",
   "你这人怎么总是不长进",
   "我一看就知道你做不好",
   "你还不如那个新来的",
   "你这人真是不知好歹",
-  "别人能做到，为什么你不行",
+  "别人能做到",
   "你怎么老是让大家失望",
   "你的能力根本配不上你的野心",
   "你的想法太天真幼稚了",
@@ -143,7 +146,7 @@ const prejudiceSentences = [
   "这点小事都做不好，要你有什么用",
   "是不是所有的事你都要搞砸",
   "看来你根本不在乎别人感受",
-  "你的问题太多了，说都说不完",
+  "你的问题太多了",
   "你是怎么混到现在的",
   "你说话做事真是没水平",
   "你这人怎么一点基本素质都没有",
@@ -152,7 +155,7 @@ const prejudiceSentences = [
   "你这样的人真是让人头疼",
   "你怎么总是理解不了简单的道理",
   "你这种性格怎么会有人喜欢你",
-  "你的格局太小了，成不了大事",
+  "你的格局太小了",
   "你简直是在浪费大家时间",
   "你真以为你很重要吗",
   "你脑子里到底在想什么",
@@ -173,26 +176,40 @@ const BG_BATCH_SIZE = 50;
 let occupiedColumns = [];
 const COLUMN_WIDTH = 50; // 每列的宽度
 
+// 雨伞图片
+let umbrellaBlackImg; // 黑色雨伞图片
+let umbrellaWhiteImg; // 白色雨伞图片
+
+// 人生哲理短句数组
+const wisdomQuotes = [
+  "「不闻而是闻，不言而是言，静中体真我。」",
+  "「万籁有声皆可闻，唯有静心闻真音。」",
+  "「聆听万物而心不杂，方能见自性。」",
+  "「我思故我在，我听故我悟。」",
+  "「真正的智慧是懂得过滤噪音，聆听真理。」"
+];
+
+// 当前选择的哲理短句（游戏结束时使用）
+let currentWisdomQuote = "";
+
+// 添加全局变量用于伤害反馈效果
+let damageFlashOpacity = 0; // 屏幕闪白效果的不透明度
+let characterShakeAmount = 0; // "我"字颤动幅度
+
 function preload() {
-  // 创建伞的图形
-  createUmbrellaGraphics();
+  // 加载雨伞图片
+  umbrellaBlackImg = loadImage('img/img_umbralla_black.png');
+  umbrellaWhiteImg = loadImage('img/img_umbralla_white.png');
 }
 
-// 创建伞的图形
-function createUmbrellaGraphics() {
-  umbrellaImg = createGraphics(300, 200);
-  updateUmbrellaGraphics();
-}
-
-// 更新雨伞颜色并重绘
-function updateUmbrellaGraphics() {
-  umbrellaImg.clear(); // 清除之前的内容
-  umbrellaImg.fill(umbrellaColor[0], umbrellaColor[1], umbrellaColor[2]);
-  umbrellaImg.noStroke();
-  // 绘制伞的半圆形顶部
-  umbrellaImg.arc(150, 120, 280, 160, PI, 0, CHORD);
-  // 绘制伞柄
-  umbrellaImg.rect(145, 120, 10, 80);
+// 更新当前使用的雨伞图片
+function updateUmbrellaImage() {
+  // 根据当前状态选择使用黑色或白色雨伞图片
+  if (isWhiteStorm && colorTransitionProgress > 0.5) {
+    umbrellaImg = umbrellaWhiteImg; // 暴雨状态使用白色雨伞
+  } else {
+    umbrellaImg = umbrellaBlackImg; // 正常状态使用黑色雨伞
+  }
 }
 
 function setup() {
@@ -210,17 +227,26 @@ function setup() {
     occupiedColumns[i] = false;
   }
   
-  // 初始化一些雨滴，确保它们不在同一列
-  for (let i = 0; i < 30; i++) {
-    addNewRaindrop();
+  // 如果是游戏开始界面，设置为暴雨背景
+  if (gameState === "start") {
+    isWhiteStorm = true;
+    colorTransitionProgress = 1.0;
+    bgColorCurrent = [...bgColorTarget]; // 黑色背景
+    updateUmbrellaImage(); // 设置为白色雨伞
+    stormPhase = -1; // 特殊状态，停止暴雨循环
+  } else {
+    // 初始化一些雨滴，确保它们不在同一列
+    for (let i = 0; i < 30; i++) {
+      addNewRaindrop();
+    }
+    
+    // 初始化第一次暴雨时间
+    scheduleNextWhiteStorm();
   }
   
   // 设置文本样式
   textAlign(CENTER, CENTER);
   textSize(16);
-  
-  // 初始化第一次暴雨时间
-  scheduleNextWhiteStorm();
   
   // 初始化玩家大小
   player.updateSize();
@@ -393,8 +419,10 @@ function draw() {
   // 动态调整性能
   optimizePerformance();
   
-  // 更新暴雨状态
-  updateWhiteStormStatus();
+  // 仅在游戏进行中更新暴雨状态
+  if (gameState === "playing") {
+    updateWhiteStormStatus();
+  }
   
   // 绘制背景
   if (isWhiteStorm || isTransitioningIn || isTransitioningOut) {
@@ -410,19 +438,85 @@ function draw() {
     drawBackgroundLetters();
   }
   
+  // 游戏开始界面
+  if (gameState === "start") {
+    drawStartScreen();
+    return; // 不执行后续游戏逻辑
+  }
+  
   // 显示得分 - 在背景层之后，雨滴之前
   displayScore();
   
   // 检查游戏是否结束（HP为0）
   if (player.hp <= 0) {
+    // 只在首次进入结束状态时设置
+    if (gameState !== "end") {
+      gameState = "end";
+      
+      // 设置为暴雨黑暗氛围
+      if (!isWhiteStorm) {
+        // 立即强制切换到黑色背景
+        isWhiteStorm = true;
+        colorTransitionProgress = 1.0; // 直接设置为完全过渡状态
+        bgColorCurrent = [...bgColorTarget]; // 直接设置为目标颜色(黑色)
+        updateUmbrellaImage(); // 设置为白色雨伞
+        
+        // 停止暴雨计时切换
+        stormPhase = -1; // 使用特殊值-1表示游戏结束状态
+      }
+      
+      // 随机选择一句哲理短句（只在首次进入结束状态时选择）
+      currentWisdomQuote = wisdomQuotes[Math.floor(Math.random() * wisdomQuotes.length)];
+    }
+    
     // 显示游戏结束信息
     textAlign(CENTER, CENTER);
-    textSize(42);
+    
+    // 动态调整标题字号，确保哲理短句能完整显示
+    let titleSize = 42; // 默认字号
+    let maxWidth = width * 0.9; // 最大宽度为屏幕宽度的90%
+    
+    // 临时测量文本宽度
+    textSize(titleSize);
+    let textWidth = this._renderer.textWidth(currentWisdomQuote);
+    
+    // 如果文本宽度超过最大宽度，则按比例缩小字号
+    if (textWidth > maxWidth) {
+      titleSize = titleSize * (maxWidth / textWidth);
+    }
+    
+    // 应用最终字号
+    textSize(titleSize);
     fill(255, 255, 255);
-    text("游戏结束", width/2, height/2 - 30);
+    text(currentWisdomQuote, width/2, height/2 - 30);
+    
+    // 显示分数
     textSize(24);
-    text("得分: " + score, width/2, height/2 + 30);
-    text("按R键重新开始", width/2, height/2 + 70);
+    text("修为: " + score, width/2, height/2 + 30);
+    
+    // 添加"重新开始"按钮
+    let btnX = width/2;
+    let btnY = height/2 + 90;
+    let btnWidth = 100;
+    let btnHeight = 40;
+    
+    // 检查鼠标是否悬停在按钮上
+    let isHovering = mouseX > btnX - btnWidth/2 && mouseX < btnX + btnWidth/2 && 
+                     mouseY > btnY - btnHeight/2 && mouseY < btnY + btnHeight/2;
+    
+    // 绘制按钮
+    if (isHovering) {
+      fill(220, 220, 220);
+    } else {
+      fill(180, 180, 180);
+    }
+    noStroke();
+    rect(btnX - btnWidth/2, btnY - btnHeight/2, btnWidth, btnHeight, 8);
+    
+    // 绘制按钮文字
+    fill(0);
+    textSize(20);
+    text("重新开始", btnX, btnY);
     
     // 不再进行其他游戏逻辑
     return;
@@ -505,15 +599,17 @@ function draw() {
   }
   
   // 在底部中央绘制伞
-  let umbrellaScale = min(width, height) * 0.002;
+  let umbrellaScale = min(width, height) * 0.001; // 原来是0.002，缩小50%
   let umbrellaX = width / 2 - (umbrellaImg.width * umbrellaScale) / 2;
   let umbrellaY = height - (umbrellaImg.height * umbrellaScale);
+  
+  // 更新雨伞图片
+  updateUmbrellaImage();
   
   push();
   translate(umbrellaX, umbrellaY);
   scale(umbrellaScale);
-  // 使用当前雨伞颜色
-  updateUmbrellaGraphics(); // 更新雨伞颜色
+  // 使用当前选择的雨伞图片
   image(umbrellaImg, 0, 0);
   pop();
   
@@ -622,6 +718,18 @@ function draw() {
     fill(0);
     textAlign(CENTER, CENTER); // 恢复默认对齐
   }
+  
+  // 更新屏幕闪白效果
+  if (damageFlashOpacity > 0) {
+    // 绘制全屏白色半透明矩形
+    fill(255, 255, 255, damageFlashOpacity);
+    noStroke();
+    rect(0, 0, width, height);
+    
+    // 减少不透明度，使闪白效果逐渐消失
+    damageFlashOpacity -= 10; // 每帧减少10点不透明度
+    if (damageFlashOpacity < 0) damageFlashOpacity = 0;
+  }
 }
 
 // 绘制背景字母的优化方法
@@ -642,13 +750,25 @@ function drawBackgroundLetters() {
       
       // 只在特定帧更新位置，减少计算量
       if (frameCounter % letter.updateFrequency === 0) {
-        letter.y += letter.speed;
-        
-        // 如果字母移出屏幕底部，重新放置到顶部
-        if (letter.y > height) {
-          letter.y = -20;
-          letter.x = random(width);
-          letter.char = backgroundChars.charAt(floor(random(backgroundChars.length)));
+        // 暴雨阶段(黑色背景)时字符向上运动，正常时向下运动
+        if (isWhiteStorm && colorTransitionProgress > 0.5) {
+          letter.y -= letter.speed; // 反向运动
+          
+          // 如果字母移出屏幕顶部，重新放置到底部
+          if (letter.y < -20) {
+            letter.y = height + 20;
+            letter.x = random(width);
+            letter.char = backgroundChars.charAt(floor(random(backgroundChars.length)));
+          }
+        } else {
+          letter.y += letter.speed; // 正常向下运动
+          
+          // 如果字母移出屏幕底部，重新放置到顶部
+          if (letter.y > height) {
+            letter.y = -20;
+            letter.x = random(width);
+            letter.char = backgroundChars.charAt(floor(random(backgroundChars.length)));
+          }
         }
       }
       
@@ -683,7 +803,7 @@ function displayScore() {
   // 分数使用半透明白色显示，透明度增加50%
   if (isWhiteStorm && colorTransitionProgress > 0.5) {
     // 在暴雨黑色背景下使用白色显示
-    fill(255, 255, 255, 0); // 原来是180，增加50%透明度，即减少alpha值
+    fill(255, 255, 255, 50); // 原来是180，增加50%透明度，即减少alpha值
   } else {
     // 在正常背景下使用白色显示，但更不透明
     fill(255, 255, 255, 50); // 原来是220，增加50%透明度，即减少alpha值
@@ -694,22 +814,78 @@ function displayScore() {
   pop();
 }
 
-// 按键事件，用于切换调试模式和自动优化
-function keyPressed() {
-  if (key === 'd' || key === 'D') {
-    debugMode = !debugMode;
-  } else if (key === 'o' || key === 'O') {
-    autoOptimize = !autoOptimize;
-    console.log("自动优化: " + (autoOptimize ? "开启" : "关闭"));
-  } else if (key === 'r' || key === 'R') {
-    // 重置游戏
-    resetGame();
+// 绘制游戏开始界面
+function drawStartScreen() {
+  textAlign(CENTER, CENTER);
+  
+  // 标题
+  textSize(48);
+  fill(255, 255, 255);
+  text("「雨中修行」", width/2, height/2 - 50);
+  
+  // "开始修行"按钮
+  let btnX = width/2;
+  let btnY = height/2 + 50;
+  let btnWidth = 150;
+  let btnHeight = 50;
+  
+  // 检查鼠标是否悬停在按钮上
+  let isHovering = mouseX > btnX - btnWidth/2 && mouseX < btnX + btnWidth/2 && 
+                   mouseY > btnY - btnHeight/2 && mouseY < btnY + btnHeight/2;
+  
+  // 绘制按钮
+  if (isHovering) {
+    fill(220, 220, 220);
+  } else {
+    fill(180, 180, 180);
   }
-  return false;
+  noStroke();
+  rect(btnX - btnWidth/2, btnY - btnHeight/2, btnWidth, btnHeight, 8);
+  
+  // 绘制按钮文字
+  fill(0);
+  textSize(24);
+  text("开始", btnX, btnY);
+}
+
+// 开始游戏
+function startGame() {
+  gameState = "playing";
+  isWhiteStorm = false;
+  colorTransitionProgress = 0;
+  bgColorCurrent = [...bgColorStart]; // 恢复正常背景色
+  updateUmbrellaImage(); // 设置为黑色雨伞
+  stormPhase = 0;
+  
+  // 重置得分和玩家状态
+  score = 0;
+  player.hp = player.maxHp;
+  player.updateSize();
+  
+  // 初始化雨滴
+  for (let i = 0; i < 30; i++) {
+    addNewRaindrop();
+  }
+  
+  // 调度第一次暴雨
+  scheduleNextWhiteStorm();
 }
 
 // 重置游戏
 function resetGame() {
+  // 回到开始界面
+  gameState = "start";
+  
+  // 清空当前哲理短句，确保下次游戏结束时重新随机选择
+  currentWisdomQuote = "";
+  
+  // 重新设置为暴雨背景
+  isWhiteStorm = true;
+  colorTransitionProgress = 1.0;
+  bgColorCurrent = [...bgColorTarget]; // 黑色背景
+  updateUmbrellaImage(); // 设置为白色雨伞
+  stormPhase = -1; // 特殊状态，停止暴雨循环
+  
   // 重置得分
   score = 0;
   
@@ -727,35 +903,60 @@ function resetGame() {
   // 重置玩家大小
   player.updateSize();
   
-  // 重置暴雨事件和相关效果
-  isWhiteStorm = false;
-  isLightningWarning = false;
-  stormPhase = 0;
-  isStormPaused = false;
-  isTransitioningIn = false;
-  isTransitioningOut = false;
-  colorTransitionProgress = 0;
-  bgColorCurrent = [...bgColorStart];
-  umbrellaColor = [0, 0, 0]; // 黑色雨伞
-  updateUmbrellaGraphics(); // 更新雨伞颜色
-  
-  // 安排下一次暴雨
-  scheduleNextWhiteStorm();
-  
   // 重置占用列
   for (let i = 0; i < occupiedColumns.length; i++) {
     occupiedColumns[i] = false;
   }
-  
-  // 重新初始化雨滴
-  for (let i = 0; i < 30; i++) {
-    addNewRaindrop();
+}
+
+// 按键事件，用于切换调试模式和自动优化
+function keyPressed() {
+  if (key === 'd' || key === 'D') {
+    debugMode = !debugMode;
+  } else if (key === 'o' || key === 'O') {
+    autoOptimize = !autoOptimize;
+    console.log("自动优化: " + (autoOptimize ? "开启" : "关闭"));
+  } else if (key === 'r' || key === 'R') {
+    // 重置游戏
+    resetGame();
   }
+  return false;
 }
 
 // 鼠标按下事件
 function mousePressed() {
-  player.checkPressed(mouseX, mouseY);
+  // 检查游戏开始界面中的开始按钮
+  if (gameState === "start") {
+    let btnX = width/2;
+    let btnY = height/2 + 50;
+    let btnWidth = 150;
+    let btnHeight = 50;
+    
+    if (mouseX > btnX - btnWidth/2 && mouseX < btnX + btnWidth/2 && 
+        mouseY > btnY - btnHeight/2 && mouseY < btnY + btnHeight/2) {
+      startGame();
+      return false;
+    }
+  }
+  
+  // 检查游戏结束界面中的重新开始按钮
+  if (gameState === "end") {
+    let btnX = width/2;
+    let btnY = height/2 + 90;
+    let btnWidth = 100;
+    let btnHeight = 40;
+    
+    if (mouseX > btnX - btnWidth/2 && mouseX < btnX + btnWidth/2 && 
+        mouseY > btnY - btnHeight/2 && mouseY < btnY + btnHeight/2) {
+      resetGame();
+      return false;
+    }
+  }
+  
+  // 游戏进行中才处理玩家点击
+  if (gameState === "playing") {
+    player.checkPressed(mouseX, mouseY);
+  }
   return false; // 防止浏览器默认行为
 }
 
@@ -773,7 +974,36 @@ function mouseReleased() {
 
 // 触摸开始事件
 function touchStarted() {
-  if (touches.length > 0) {
+  // 检查游戏开始界面中的开始按钮
+  if (gameState === "start" && touches.length > 0) {
+    let btnX = width/2;
+    let btnY = height/2 + 50;
+    let btnWidth = 150;
+    let btnHeight = 50;
+    
+    if (touches[0].x > btnX - btnWidth/2 && touches[0].x < btnX + btnWidth/2 && 
+        touches[0].y > btnY - btnHeight/2 && touches[0].y < btnY + btnHeight/2) {
+      startGame();
+      return false;
+    }
+  }
+  
+  // 检查游戏结束界面中的重新开始按钮
+  if (gameState === "end" && touches.length > 0) {
+    let btnX = width/2;
+    let btnY = height/2 + 90;
+    let btnWidth = 100;
+    let btnHeight = 40;
+    
+    if (touches[0].x > btnX - btnWidth/2 && touches[0].x < btnX + btnWidth/2 && 
+        touches[0].y > btnY - btnHeight/2 && touches[0].y < btnY + btnHeight/2) {
+      resetGame();
+      return false;
+    }
+  }
+  
+  // 游戏进行中才处理玩家触摸
+  if (gameState === "playing" && touches.length > 0) {
     player.checkPressed(touches[0].x, touches[0].y);
   }
   return false; // 防止浏览器默认行为
@@ -835,12 +1065,16 @@ class Player {
     
     // 吸收效果动画
     this.absorptionEffect = [];
+    
+    // 受伤效果
+    this.shakeDuration = 0; // 颤动持续时间
+    this.shakeIntensity = 0; // 颤动强度
   }
   
   // 更新玩家大小（基于分数）
   updateSize() {
     // 计算比例因子：每1分增加1%
-    let scaleFactor = 1 + (score * 0.01);
+    let scaleFactor = 1 + (score * 0.001);
     
     // 更新字号和半径
     this.size = this.baseSize * scaleFactor;
@@ -894,7 +1128,7 @@ class Player {
           // 根据是否为偏见短句决定加分或扣血
           if (raindrop.isPrejudice) {
             // 白色偏见短句会造成伤害
-            this.hp -= 10; // 每个字减少10点血量
+            this.hp -= 5; // 每个字减少5点血量
             if (this.hp < 0) this.hp = 0; // 确保血量不为负
             
             // 记录受伤时间
@@ -931,6 +1165,13 @@ class Player {
   // 记录受伤
   takeDamage() {
     this.lastDamageTime = millis();
+    
+    // 添加视觉反馈效果
+    damageFlashOpacity = 100; // 设置屏幕闪白效果的初始不透明度
+    
+    // 设置"我"字颤动效果
+    this.shakeDuration = 500; // 颤动持续500毫秒
+    this.shakeIntensity = 10; // 颤动最大幅度为10像素
   }
   
   update() {
@@ -950,6 +1191,17 @@ class Player {
     if (this.hp < this.maxHp && currentTime - this.lastDamageTime > this.healingDelay) {
       this.hp += this.healingRate;
       if (this.hp > this.maxHp) this.hp = this.maxHp;
+    }
+    
+    // 更新颤动效果
+    if (this.shakeDuration > 0) {
+      this.shakeDuration -= deltaTime; // deltaTime是p5.js提供的上一帧到当前帧的时间间隔（毫秒）
+      if (this.shakeDuration < 0) this.shakeDuration = 0;
+      
+      // 根据剩余时间计算当前颤动幅度
+      characterShakeAmount = (this.shakeDuration / 500) * this.shakeIntensity;
+    } else {
+      characterShakeAmount = 0;
     }
   }
   
@@ -983,6 +1235,16 @@ class Player {
     // 取消描边
     noStroke();
     
+    // 计算"我"字的显示位置（添加颤动效果）
+    let displayX = this.x;
+    let displayY = this.y;
+    
+    if (characterShakeAmount > 0) {
+      // 添加随机偏移实现颤动效果
+      displayX += random(-characterShakeAmount, characterShakeAmount);
+      displayY += random(-characterShakeAmount, characterShakeAmount);
+    }
+    
     // 绘制"我"字
     textSize(this.size);
     
@@ -995,7 +1257,7 @@ class Player {
       fill(0);
     }
     
-    text("我", this.x, this.y);
+    text("我", displayX, displayY);
     
     // 绘制吸收动画效果
     for (let effect of this.absorptionEffect) {
@@ -1067,12 +1329,12 @@ class Raindrop {
     // 基于是否为偏见短句决定大小和颜色
     if (this.isPrejudice) {
       // 偏见短句使用36号字体和255透明度
-      this.size = 36;
+      this.size = 32;
       this.color = color(255, 255, 255, 255); // 纯白色，不透明
     } else {
       // 普通短句
       // 基于深度值确定字体大小和颜色深浅
-      this.size = map(this.depth, 0, 1, 36, 24); // 扩大字号范围
+      this.size = map(this.depth, 0, 1, 26, 18); // 扩大字号范围
       
       // 调整透明度范围， 背景字母透明度为150-255
       let alpha = map(this.depth, 0, 1, 255, 150);
@@ -1086,8 +1348,9 @@ class Raindrop {
   // 检查每个字符是否到达底部，并为到达底部的字符创建飞溅效果
   checkSplashChars() {
     let bottomReached = false;
-    // 伞的顶部y坐标（简化计算）
-    let umbrellaTop = height - 100;
+    // 伞的顶部y坐标 - 降低碰撞区域高度10%
+    let actualUmbrellaHeight = umbrellaImg ? umbrellaImg.height * min(width, height) * 0.001 : 100;
+    let umbrellaTop = height - (actualUmbrellaHeight * 0.7); // 减少30%的高度
     
     for (let i = 0; i < this.sentenceWords.length; i++) {
       // 计算每个字符的y位置
@@ -1095,7 +1358,7 @@ class Raindrop {
       this.charStates[i].y = charY;
       
       // 检查字符是否到达底部或伞的顶部且尚未飞溅或被吸收
-      if ((charY >= height || (Math.abs(this.x - width/2) < 140 && charY >= umbrellaTop)) && 
+      if ((charY >= height || (Math.abs(this.x - width/2) < umbrellaImg.width * min(width, height) * 0.0005 && charY >= umbrellaTop)) && 
           !this.charStates[i].splashed && !this.charStates[i].absorbed) {
         bottomReached = true;
         this.charStates[i].reachedBottom = true;
@@ -1104,7 +1367,7 @@ class Raindrop {
         for (let j = 0; j < random(3, 8); j++) {
           splashParticles.push(new SplashParticle(
             this.x,
-            charY >= umbrellaTop && Math.abs(this.x - width/2) < 140 ? umbrellaTop : height, // 在地面或伞顶飞溅
+            charY >= umbrellaTop && Math.abs(this.x - width/2) < umbrellaImg.width * min(width, height) * 0.0005 ? umbrellaTop : height, 
             this.sentenceWords[i],
             this.color
           ));
@@ -1217,6 +1480,9 @@ class SplashParticle {
 
 // 更新暴雨状态
 function updateWhiteStormStatus() {
+  // 如果游戏已结束，不再更新暴雨状态
+  if (stormPhase === -1) return;
+  
   let currentTime = millis();
   
   // 如果不在暴雨状态但该开始暴雨了
@@ -1314,12 +1580,9 @@ function updateColors() {
     bgColorCurrent[i] = lerp(bgColorStart[i], bgColorTarget[i], colorTransitionProgress);
   }
   
-  // 雨伞颜色 - 从黑色到白色
-  if (isWhiteStorm) {
-    umbrellaColor[0] = umbrellaColor[1] = umbrellaColor[2] = lerp(0, 255, colorTransitionProgress);
-  } else {
-    umbrellaColor[0] = umbrellaColor[1] = umbrellaColor[2] = lerp(255, 0, 1 - colorTransitionProgress);
-  }
+  // 雨伞颜色不再需要更新，因为现在使用图片
+  // 但我们需要更新使用的雨伞图片
+  updateUmbrellaImage();
 }
 
 // 移除所有正在下落的黑色短句
